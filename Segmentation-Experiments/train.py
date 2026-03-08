@@ -26,8 +26,8 @@ from models.factory import create_segmenter
 
 def get_parser():
     parser = argparse.ArgumentParser(description='PyTorch Semantic Segmentation')
-    parser.add_argument('--config', type=str, default='config/michael/rescuenet-pspnet101.yaml', help='config file')
-    parser.add_argument('opts', help='see config/michael/rescuenet-pspnet101.yaml for all options', default=None, nargs=argparse.REMAINDER)
+    parser.add_argument('--config', type=str, default='config/rescuenet-pspnet101.yaml', help='config file')
+    parser.add_argument('opts', help='see config/rescuenet-pspnet101.yaml for all options', default=None, nargs=argparse.REMAINDER)
     args = parser.parse_args()
     assert args.config is not None
     cfg = config.load_cfg_from_cfg_file(args.config)
@@ -69,6 +69,13 @@ def main_worker(gpu, ngpus_per_node, argss):
     global args
     args = argss
     print(args)
+
+    train_epochs = []
+    train_loss = []
+    train_accuracy = []
+    val_epochs = []
+    val_loss = []
+    val_accuracy = []
     
     BatchNorm = nn.BatchNorm2d
 
@@ -124,20 +131,20 @@ def main_worker(gpu, ngpus_per_node, argss):
             if main_process():
                 logger.info("=> no weight found at '{}'".format(args.weight))
 
-    if args.resume:
-        if os.path.isfile(args.resume):
+    if getattr(args, 'resume', None) and (args.resume if not isinstance(args.resume, str) else args.resume.strip()):
+        resume_path = args.resume.strip() if isinstance(args.resume, str) else args.resume
+        if os.path.isfile(resume_path):
             if main_process():
-                logger.info("=> loading checkpoint '{}'".format(args.resume))
-            # checkpoint = torch.load(args.resume)
-            checkpoint = torch.load(args.resume, map_location=lambda storage, loc: storage.cuda())
+                logger.info("=> loading checkpoint '{}'".format(resume_path))
+            checkpoint = torch.load(resume_path, map_location=lambda storage, loc: storage.cuda())
             args.start_epoch = checkpoint['epoch']
             model.load_state_dict(checkpoint['state_dict'])
             optimizer.load_state_dict(checkpoint['optimizer'])
             if main_process():
-                logger.info("=> loaded checkpoint '{}' (epoch {})".format(args.resume, checkpoint['epoch']))
+                logger.info("=> loaded checkpoint '{}' (epoch {})".format(resume_path, checkpoint['epoch']))
         else:
             if main_process():
-                logger.info("=> no checkpoint found at '{}'".format(args.resume))
+                logger.info("=> no checkpoint found at '{}'".format(resume_path))
 
     value_scale = 255
     mean = [0.485, 0.456, 0.406]
@@ -147,9 +154,8 @@ def main_worker(gpu, ngpus_per_node, argss):
 
     # Import the requested dataset
     if args.dataset.lower() == 'rescuenet':
-        from data import RescueNetv2 as dataset
+        from data import RescueNet as dataset
     else:
-        # Should never happen...but just in case it does
         raise RuntimeError("\"{0}\" is not a supported dataset.".format(
             args.dataset))
 
@@ -163,21 +169,37 @@ def main_worker(gpu, ngpus_per_node, argss):
         ext_transforms.PILToLongTensor()
     ])
 
+    # Paper-style augmentation (scale, rotate, flip, crop) for training
+    joint_transform = None
+    if hasattr(args, 'scale_min') and hasattr(args, 'scale_max') and hasattr(args, 'rotate_min') and hasattr(args, 'rotate_max'):
+        joint_transform = transform.Compose([
+            transform.RandScale([args.scale_min, args.scale_max]),
+            transform.RandRotate([args.rotate_min, args.rotate_max], padding=mean, ignore_label=args.ignore_label),
+            transform.RandomHorizontalFlip(),
+            transform.Crop((args.train_h, args.train_w), 'rand', padding=mean, ignore_label=args.ignore_label),
+            transform.ToTensor(),
+            transform.Normalize(mean, std)
+        ])
+
     train_data = dataset(
         args.data_root,
+        mode='train',
         transform=image_transform,
-        label_transform=label_transform)
+        label_transform=label_transform,
+        num_classes=args.classes,
+        joint_transform=joint_transform)
     train_loader = torch.utils.data.DataLoader(train_data, batch_size=args.batch_size, shuffle=True, num_workers=args.workers, drop_last=True)
     
     if args.evaluate:
-        label_transform = transforms.Compose([
+        label_transform_val = transforms.Compose([
             transforms.Resize((args.train_h, args.train_w), Image.NEAREST),
             ext_transforms.PILToLongTensor()])
         val_data = dataset(
             args.data_root,
             mode='val',
             transform=image_transform,
-            label_transform=label_transform)
+            label_transform=label_transform_val,
+            num_classes=args.classes)
         val_loader = torch.utils.data.DataLoader(val_data, batch_size=args.batch_size_val, shuffle=False, num_workers=args.workers)
         
     for epoch in range(args.start_epoch, args.epochs):

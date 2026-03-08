@@ -1,9 +1,19 @@
+import os
 import torch
 import torch.nn as nn
 import math
 import torch.utils.model_zoo as model_zoo
 
 BatchNorm = nn.BatchNorm2d
+
+
+def _load_pretrained_state_dict(model, url, strict=False):
+    """Load from URL if local initmodel file not found (e.g. on Kaggle)."""
+    if hasattr(torch.hub, 'load_state_dict_from_url'):
+        state_dict = torch.hub.load_state_dict_from_url(url, progress=True)
+    else:
+        state_dict = model_zoo.load_url(url)
+    model.load_state_dict(state_dict, strict=strict)
 
 __all__ = ['ResNet', 'resnet18', 'resnet34', 'resnet50', 'resnet101',
            'resnet152']
@@ -196,9 +206,11 @@ def resnet50(pretrained=False, **kwargs):
     """
     model = ResNet(Bottleneck, [3, 4, 6, 3], **kwargs)
     if pretrained:
-        # model.load_state_dict(model_zoo.load_url(model_urls['resnet50']))
         model_path = './initmodel/resnet50_v2.pth'
-        model.load_state_dict(torch.load(model_path), strict=False)
+        if os.path.isfile(model_path):
+            model.load_state_dict(torch.load(model_path), strict=False)
+        else:
+            _load_pretrained_state_dict(model, model_urls['resnet50'])
     return model
 
 
@@ -210,9 +222,11 @@ def resnet101(pretrained=False, **kwargs):
     """
     model = ResNet(Bottleneck, [3, 4, 23, 3], **kwargs)
     if pretrained:
-        # model.load_state_dict(model_zoo.load_url(model_urls['resnet101']))
         model_path = './initmodel/resnet101_v2.pth'
-        model.load_state_dict(torch.load(model_path), strict=False)
+        if os.path.isfile(model_path):
+            model.load_state_dict(torch.load(model_path), strict=False)
+        else:
+            _load_pretrained_state_dict(model, model_urls['resnet101'])
     return model
 
 
@@ -224,7 +238,9 @@ def resnet152(pretrained=False, **kwargs):
     """
     model = ResNet(Bottleneck, [3, 8, 36, 3], **kwargs)
     if pretrained:
-        # model.load_state_dict(model_zoo.load_url(model_urls['resnet152']))
         model_path = './initmodel/resnet152_v2.pth'
-        model.load_state_dict(torch.load(model_path), strict=False)
+        if os.path.isfile(model_path):
+            model.load_state_dict(torch.load(model_path), strict=False)
+        else:
+            _load_pretrained_state_dict(model, model_urls['resnet152'])
     return model

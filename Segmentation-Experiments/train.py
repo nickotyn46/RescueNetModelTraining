@@ -354,13 +354,17 @@ def validate(val_loader, model, criterion):
     union_meter = AverageMeter()
     target_meter = AverageMeter()
 
-    model.eval()
+    # Validation'ı tek GPU'da yap (DataParallel replicate NCCL hatasını önler)
+    eval_model = model.module if isinstance(model, nn.DataParallel) else model
+    eval_model.eval()
+    val_device = torch.device('cuda:0')
     end = time.time()
     for i, (input, target) in enumerate(val_loader):
         data_time.update(time.time() - end)
-        input = input.cuda(non_blocking=True)
-        target = target.cuda(non_blocking=True)
-        output = model(input)
+        input = input.to(val_device, non_blocking=True)
+        target = target.to(val_device, non_blocking=True)
+        with torch.no_grad():
+            output = eval_model(input)
         if args.zoom_factor != 8:
             output = F.interpolate(output, size=target.size()[1:], mode='bilinear', align_corners=True)
         loss = criterion(output, target)

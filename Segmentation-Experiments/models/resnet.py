@@ -8,19 +8,25 @@ import torch.utils.model_zoo as model_zoo
 
 BatchNorm = nn.BatchNorm2d
 
-# hszhao/semseg resmi initmodel klasörü (Caffe-style ResNet v2)
-INITMODEL_DRIVE_FOLDER_ID = "15wx9vOM0euyizq-M1uINgN0_wjVRf9J3"
+# hszhao/semseg initmodel - tek tek dosya ID (klasör değil, sadece bu 3 dosya iner)
+INITMODEL_FILE_IDS = {
+    "resnet50_v2.pth": "1w5pRmLJXvmQQA5PtCbHhZc_uC4o0YbmA",
+    "resnet101_v2.pth": "1V-sfLnqSuwTPgNMrqUp4HDZpqtoBH4xm",
+    "resnet152_v2.pth": "1pVzjWA1C-y4TniEkc06ygRO6e4Mec0wW",
+}
 
 
-def _ensure_initmodel_dir():
-    """initmodel/ yoksa veya boşsa Google Drive'dan (hszhao/semseg) indirir."""
-    initmodel_dir = os.path.join(os.path.dirname(__file__), "..", "initmodel")
-    initmodel_dir = os.path.abspath(initmodel_dir)
-    if not os.path.isdir(initmodel_dir):
-        os.makedirs(initmodel_dir, exist_ok=True)
-    # Zaten resnet101_v2.pth varsa indirmeyi atla
-    if os.path.isfile(os.path.join(initmodel_dir, "resnet101_v2.pth")):
-        return initmodel_dir
+def _get_initmodel_path(filename):
+    """initmodel/ dosya yolu; yoksa sadece o dosyayı Drive'dan indirir (tek dosya)."""
+    base = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+    initmodel_dir = os.path.join(base, "initmodel")
+    path = os.path.join(initmodel_dir, filename)
+    if os.path.isfile(path):
+        return path
+    file_id = INITMODEL_FILE_IDS.get(filename)
+    if not file_id:
+        return None
+    os.makedirs(initmodel_dir, exist_ok=True)
     try:
         try:
             import gdown
@@ -31,36 +37,12 @@ def _ensure_initmodel_dir():
                 capture_output=True,
             )
             import gdown
-        url = f"https://drive.google.com/drive/folders/{INITMODEL_DRIVE_FOLDER_ID}"
-        gdown.download_folder(url, output=initmodel_dir, quiet=False, use_cookies=False)
-        # Drive alt klasör indirdiyse pth'leri üst dizine taşı
-        for root, _, files in os.walk(initmodel_dir, topdown=False):
-            for f in files:
-                if f.endswith("_v2.pth"):
-                    src = os.path.join(root, f)
-                    dst = os.path.join(initmodel_dir, f)
-                    if src != dst and os.path.isfile(src):
-                        import shutil
-                        shutil.copy2(src, dst)
+        gdown.download(id=file_id, output=path, quiet=False)
+        if os.path.isfile(path):
+            return path
     except Exception as e:
         import warnings
-        warnings.warn(f"initmodel indirilemedi: {e}. Backbone sıfırdan başlayacak.")
-    return initmodel_dir
-
-
-def _get_initmodel_path(filename):
-    """initmodel dosya yolu; yoksa indirmeyi dene."""
-    base = os.path.join(os.path.dirname(__file__), "..")
-    path = os.path.abspath(os.path.join(base, "initmodel", filename))
-    if os.path.isfile(path):
-        return path
-    initmodel_dir = _ensure_initmodel_dir()
-    path = os.path.join(initmodel_dir, filename)
-    if os.path.isfile(path):
-        return path
-    for root, _, files in os.walk(initmodel_dir):
-        if filename in files:
-            return os.path.join(root, filename)
+        warnings.warn(f"initmodel/{filename} indirilemedi: {e}")
     return None
 
 

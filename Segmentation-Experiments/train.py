@@ -9,6 +9,7 @@ import cv2
 import argparse
 
 import torch
+import torch.distributed as dist
 import torch.backends.cudnn as cudnn
 import torch.nn as nn
 import torch.nn.functional as F
@@ -268,8 +269,11 @@ def train(train_loader, model, optimizer, epoch):
         input = input.cuda(non_blocking=True).float()
         target = target.cuda(non_blocking=True)
         output, main_loss, aux_loss = model(input, target)
-        if not args.multiprocessing_distributed:
-            main_loss, aux_loss = torch.mean(main_loss), torch.mean(aux_loss)
+        # DataParallel GPU başına bir loss döndürür; skaler olmalı (backward için)
+        if main_loss.dim() > 0:
+            main_loss = main_loss.mean()
+        if aux_loss.dim() > 0:
+            aux_loss = aux_loss.mean()
         loss = main_loss + args.aux_weight * aux_loss
         
         optimizer.zero_grad()
@@ -277,7 +281,7 @@ def train(train_loader, model, optimizer, epoch):
         optimizer.step()
 
         n = input.size(0)
-        if args.multiprocessing_distributed:
+        if args.multiprocessing_distributed and dist.is_initialized():
             main_loss, aux_loss, loss = main_loss.detach() * n, aux_loss * n, loss * n  # not considering ignore pixels
             count = target.new_tensor([n], dtype=torch.long)
             dist.all_reduce(main_loss), dist.all_reduce(aux_loss), dist.all_reduce(loss), dist.all_reduce(count)
@@ -285,7 +289,7 @@ def train(train_loader, model, optimizer, epoch):
             main_loss, aux_loss, loss = main_loss / n, aux_loss / n, loss / n
 
         intersection, union, target = intersectionAndUnionGPU(output, target, args.classes, args.ignore_label)
-        if args.multiprocessing_distributed:
+        if args.multiprocessing_distributed and dist.is_initialized():
             dist.all_reduce(intersection), dist.all_reduce(union), dist.all_reduce(target)
         intersection, union, target = intersection.cpu().numpy(), union.cpu().numpy(), target.cpu().numpy()
         intersection_meter.update(intersection), union_meter.update(union), target_meter.update(target)
@@ -362,18 +366,19 @@ def validate(val_loader, model, criterion):
         loss = criterion(output, target)
 
         n = input.size(0)
-        if args.multiprocessing_distributed:
+        if args.multiprocessing_distributed and dist.is_initialized():
             loss = loss * n  # not considering ignore pixels
             count = target.new_tensor([n], dtype=torch.long)
             dist.all_reduce(loss), dist.all_reduce(count)
             n = count.item()
             loss = loss / n
         else:
-            loss = torch.mean(loss)
+            if loss.dim() > 0:
+                loss = loss.mean()
 
         output = output.max(1)[1]
         intersection, union, target = intersectionAndUnionGPU(output, target, args.classes, args.ignore_label)
-        if args.multiprocessing_distributed:
+        if args.multiprocessing_distributed and dist.is_initialized():
             dist.all_reduce(intersection), dist.all_reduce(union), dist.all_reduce(target)
         intersection, union, target = intersection.cpu().numpy(), union.cpu().numpy(), target.cpu().numpy()
         intersection_meter.update(intersection), union_meter.update(union), target_meter.update(target)

@@ -1,4 +1,6 @@
 import os
+import sys
+import subprocess
 import torch
 import torch.nn as nn
 import math
@@ -6,14 +8,68 @@ import torch.utils.model_zoo as model_zoo
 
 BatchNorm = nn.BatchNorm2d
 
+# hszhao/semseg resmi initmodel klasörü (Caffe-style ResNet v2)
+INITMODEL_DRIVE_FOLDER_ID = "15wx9vOM0euyizq-M1uINgN0_wjVRf9J3"
 
-def _load_pretrained_state_dict(model, url, strict=False):
-    """Load from URL if local initmodel file not found (e.g. on Kaggle)."""
-    if hasattr(torch.hub, 'load_state_dict_from_url'):
-        state_dict = torch.hub.load_state_dict_from_url(url, progress=True)
-    else:
-        state_dict = model_zoo.load_url(url)
-    model.load_state_dict(state_dict, strict=strict)
+
+def _ensure_initmodel_dir():
+    """initmodel/ yoksa veya boşsa Google Drive'dan (hszhao/semseg) indirir."""
+    initmodel_dir = os.path.join(os.path.dirname(__file__), "..", "initmodel")
+    initmodel_dir = os.path.abspath(initmodel_dir)
+    if not os.path.isdir(initmodel_dir):
+        os.makedirs(initmodel_dir, exist_ok=True)
+    # Zaten resnet101_v2.pth varsa indirmeyi atla
+    if os.path.isfile(os.path.join(initmodel_dir, "resnet101_v2.pth")):
+        return initmodel_dir
+    try:
+        try:
+            import gdown
+        except ImportError:
+            subprocess.run(
+                [sys.executable, "-m", "pip", "install", "-q", "gdown"],
+                check=True,
+                capture_output=True,
+            )
+            import gdown
+        url = f"https://drive.google.com/drive/folders/{INITMODEL_DRIVE_FOLDER_ID}"
+        gdown.download_folder(url, output=initmodel_dir, quiet=False, use_cookies=False)
+        # Drive alt klasör indirdiyse pth'leri üst dizine taşı
+        for root, _, files in os.walk(initmodel_dir, topdown=False):
+            for f in files:
+                if f.endswith("_v2.pth"):
+                    src = os.path.join(root, f)
+                    dst = os.path.join(initmodel_dir, f)
+                    if src != dst and os.path.isfile(src):
+                        import shutil
+                        shutil.copy2(src, dst)
+    except Exception as e:
+        import warnings
+        warnings.warn(f"initmodel indirilemedi: {e}. Backbone sıfırdan başlayacak.")
+    return initmodel_dir
+
+
+def _get_initmodel_path(filename):
+    """initmodel dosya yolu; yoksa indirmeyi dene."""
+    base = os.path.join(os.path.dirname(__file__), "..")
+    path = os.path.abspath(os.path.join(base, "initmodel", filename))
+    if os.path.isfile(path):
+        return path
+    initmodel_dir = _ensure_initmodel_dir()
+    path = os.path.join(initmodel_dir, filename)
+    if os.path.isfile(path):
+        return path
+    for root, _, files in os.walk(initmodel_dir):
+        if filename in files:
+            return os.path.join(root, filename)
+    return None
+
+
+def _warn_no_pretrained(name):
+    import warnings
+    warnings.warn(
+        f"initmodel/{name} not found. This repo expects Caffe-style ResNet weights (v2); "
+        "training backbone from scratch. For best results, add initmodel/*.pth to your dataset."
+    )
 
 __all__ = ['ResNet', 'resnet18', 'resnet34', 'resnet50', 'resnet101',
            'resnet152']
@@ -206,11 +262,11 @@ def resnet50(pretrained=False, **kwargs):
     """
     model = ResNet(Bottleneck, [3, 4, 6, 3], **kwargs)
     if pretrained:
-        model_path = './initmodel/resnet50_v2.pth'
-        if os.path.isfile(model_path):
-            model.load_state_dict(torch.load(model_path), strict=False)
+        model_path = _get_initmodel_path('resnet50_v2.pth')
+        if model_path and os.path.isfile(model_path):
+            model.load_state_dict(torch.load(model_path, map_location='cpu'), strict=False)
         else:
-            _load_pretrained_state_dict(model, model_urls['resnet50'])
+            _warn_no_pretrained('resnet50_v2.pth')
     return model
 
 
@@ -222,11 +278,11 @@ def resnet101(pretrained=False, **kwargs):
     """
     model = ResNet(Bottleneck, [3, 4, 23, 3], **kwargs)
     if pretrained:
-        model_path = './initmodel/resnet101_v2.pth'
-        if os.path.isfile(model_path):
-            model.load_state_dict(torch.load(model_path), strict=False)
+        model_path = _get_initmodel_path('resnet101_v2.pth')
+        if model_path and os.path.isfile(model_path):
+            model.load_state_dict(torch.load(model_path, map_location='cpu'), strict=False)
         else:
-            _load_pretrained_state_dict(model, model_urls['resnet101'])
+            _warn_no_pretrained('resnet101_v2.pth')
     return model
 
 
@@ -238,9 +294,9 @@ def resnet152(pretrained=False, **kwargs):
     """
     model = ResNet(Bottleneck, [3, 8, 36, 3], **kwargs)
     if pretrained:
-        model_path = './initmodel/resnet152_v2.pth'
-        if os.path.isfile(model_path):
-            model.load_state_dict(torch.load(model_path), strict=False)
+        model_path = _get_initmodel_path('resnet152_v2.pth')
+        if model_path and os.path.isfile(model_path):
+            model.load_state_dict(torch.load(model_path, map_location='cpu'), strict=False)
         else:
-            _load_pretrained_state_dict(model, model_urls['resnet152'])
+            _warn_no_pretrained('resnet152_v2.pth')
     return model

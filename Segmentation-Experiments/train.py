@@ -1,4 +1,7 @@
 import os
+import warnings
+warnings.filterwarnings("ignore", category=FutureWarning, message=".*timm.*")
+
 import logging
 import numpy as np
 import time
@@ -51,7 +54,13 @@ def main_process():
 
 def main():
     args = get_parser()
-    
+
+    # DataParallel: her GPU'ya batch_size/ngpus örnek düşer; BatchNorm eğitimde GPU başına en az 2 ister
+    ngpus = len(args.train_gpu)
+    if ngpus > 1 and args.batch_size < 2 * ngpus:
+        args.batch_size = 2 * ngpus
+        print(f"batch_size {ngpus} GPU için {args.batch_size} olarak ayarlandı (BatchNorm gereksinimi)")
+
     os.environ["CUDA_VISIBLE_DEVICES"] = ','.join(str(x) for x in args.train_gpu)
     
     if args.dist_url == "env://" and args.world_size == -1:

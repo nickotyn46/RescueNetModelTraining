@@ -21,7 +21,7 @@ TRAIN:
   aux_weight: 0.4
   train_gpu: [0]
   workers: 4  # data loader workers
-  batch_size: 2  # batch size for training
+  batch_size: 4  # 2+ GPU için en az 2*ngpus olmalı (BatchNorm); tek GPU'da da 4 kullanılabilir
   batch_size_val: 1  # batch size for validation during training, memory and speed tradeoff
   base_lr: 0.001
   epochs: 100

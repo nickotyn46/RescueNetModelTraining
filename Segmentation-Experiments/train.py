@@ -78,7 +78,10 @@ def main():
 def main_worker(gpu, ngpus_per_node, argss):
     global args
     args = argss
-    print(args)
+    if main_process():
+        print("Config: data_root={} | size={}x{} | batch={} | epochs={} | save_path={}".format(
+            getattr(args, 'data_root', ''), getattr(args, 'train_h', 0), getattr(args, 'train_w', 0),
+            args.batch_size, args.epochs, getattr(args, 'save_path', '')))
 
     train_epochs = []
     train_loss = []
@@ -89,7 +92,15 @@ def main_worker(gpu, ngpus_per_node, argss):
     
     BatchNorm = nn.BatchNorm2d
 
-    criterion = nn.CrossEntropyLoss(ignore_index=args.ignore_label)
+    # Sınıf dengesizliği: Building Heavy/Light'a daha fazla ağırlık (config'te class_weights)
+    class_weights = getattr(args, 'class_weights', None)
+    if class_weights is not None:
+        class_weights = torch.tensor(class_weights, dtype=torch.float32).cuda()
+        criterion = nn.CrossEntropyLoss(weight=class_weights, ignore_index=args.ignore_label)
+        if main_process():
+            print("Class weights (0=BG, 1=Light, 2=Heavy):", [float(x) for x in class_weights.cpu().tolist()])
+    else:
+        criterion = nn.CrossEntropyLoss(ignore_index=args.ignore_label)
     if args.arch == 'pspnet':
         from models.pspnet import PSPNet
         model = PSPNet(layers=args.layers, classes=args.classes, zoom_factor=args.zoom_factor, criterion=criterion, BatchNorm=BatchNorm, pretrained=args.use_pretrained_weights)
@@ -122,10 +133,10 @@ def main_worker(gpu, ngpus_per_node, argss):
         global logger, writer
         logger = get_logger()
         writer = SummaryWriter(args.save_path)
-        logger.info(args)
-        logger.info("=> creating model ...")
-        logger.info("Classes: {}".format(args.classes))
-        logger.info(model)
+        logger.info("=> model: {} | classes: {} | size: {}x{} | batch: {} | epochs: {} | lr: {}".format(
+            args.arch, args.classes, args.train_h, args.train_w, args.batch_size, args.epochs, args.base_lr))
+        nparams = sum(p.numel() for p in model.parameters() if p.requires_grad)
+        logger.info("=> trainable params: {:.1f}M".format(nparams / 1e6))
     
     model = torch.nn.DataParallel(model.cuda()) # @sh: add to avoid prev commented out block 
 
@@ -228,7 +239,7 @@ def main_worker(gpu, ngpus_per_node, argss):
 
         if (epoch_log % args.save_freq == 0) and main_process():
             filename = args.save_path + '/train_epoch_' + str(epoch_log) + '.pth'
-            logger.info('Saving checkpoint to: ' + filename)
+            logger.info('Checkpoint saved: ' + filename)
             torch.save({'epoch': epoch_log, 'state_dict': model.state_dict(), 'optimizer': optimizer.state_dict()}, filename)
             if epoch_log / args.save_freq > 2:
                 deletename = args.save_path + '/train_epoch_' + str(epoch_log - args.save_freq * 2) + '.pth'
@@ -314,21 +325,8 @@ def train(train_loader, model, optimizer, epoch):
         remain_time = '{:02d}:{:02d}:{:02d}'.format(int(t_h), int(t_m), int(t_s))
 
         if (i + 1) % args.print_freq == 0 and main_process():
-            logger.info('Epoch: [{}/{}][{}/{}] '
-                        'Data {data_time.val:.3f} ({data_time.avg:.3f}) '
-                        'Batch {batch_time.val:.3f} ({batch_time.avg:.3f}) '
-                        'Remain {remain_time} '
-                        'MainLoss {main_loss_meter.val:.4f} '
-                        'AuxLoss {aux_loss_meter.val:.4f} '
-                        'Loss {loss_meter.val:.4f} '
-                        'Accuracy {accuracy:.4f}.'.format(epoch+1, args.epochs, i + 1, len(train_loader),
-                                                          batch_time=batch_time,
-                                                          data_time=data_time,
-                                                          remain_time=remain_time,
-                                                          main_loss_meter=main_loss_meter,
-                                                          aux_loss_meter=aux_loss_meter,
-                                                          loss_meter=loss_meter,
-                                                          accuracy=accuracy))
+            logger.info('Epoch [{}/{}] batch {}/{} | loss {:.4f} acc {:.4f} | ETA {}'.format(
+                epoch+1, args.epochs, i + 1, len(train_loader), loss_meter.val, accuracy, remain_time))
         if main_process():
             writer.add_scalar('loss_train_batch', main_loss_meter.val, current_iter)
             writer.add_scalar('mIoU_train_batch', np.mean(intersection / (union + 1e-10)), current_iter)
@@ -341,12 +339,12 @@ def train(train_loader, model, optimizer, epoch):
     mAcc = np.mean(accuracy_class)
     allAcc = sum(intersection_meter.sum) / (sum(target_meter.sum) + 1e-10)
     if main_process():
-        logger.info('Train result at epoch [{}/{}]: mIoU/mAcc/allAcc {:.4f}/{:.4f}/{:.4f}.'.format(epoch+1, args.epochs, mIoU, mAcc, allAcc))
+        logger.info('Train result [epoch {}/{}]: mIoU={:.4f} mAcc={:.4f} allAcc={:.4f}'.format(epoch+1, args.epochs, mIoU, mAcc, allAcc))
     return main_loss_meter.avg, mIoU, mAcc, allAcc
 
 def validate(val_loader, model, criterion):
     if main_process():
-        logger.info('>>>>>>>>>>>>>>>> Start Evaluation >>>>>>>>>>>>>>>>')
+        logger.info('--- Validation ---')
     batch_time = AverageMeter()
     data_time = AverageMeter()
     loss_meter = AverageMeter()
@@ -387,20 +385,9 @@ def validate(val_loader, model, criterion):
         intersection, union, target = intersection.cpu().numpy(), union.cpu().numpy(), target.cpu().numpy()
         intersection_meter.update(intersection), union_meter.update(union), target_meter.update(target)
 
-        accuracy = sum(intersection_meter.val) / (sum(target_meter.val) + 1e-10)
         loss_meter.update(loss.item(), input.size(0))
         batch_time.update(time.time() - end)
         end = time.time()
-        if ((i + 1) % args.print_freq == 0) and main_process():
-            logger.info('Test: [{}/{}] '
-                        'Data {data_time.val:.3f} ({data_time.avg:.3f}) '
-                        'Batch {batch_time.val:.3f} ({batch_time.avg:.3f}) '
-                        'Loss {loss_meter.val:.4f} ({loss_meter.avg:.4f}) '
-                        'Accuracy {accuracy:.4f}.'.format(i + 1, len(val_loader),
-                                                          data_time=data_time,
-                                                          batch_time=batch_time,
-                                                          loss_meter=loss_meter,
-                                                          accuracy=accuracy))
 
     iou_class = intersection_meter.sum / (union_meter.sum + 1e-10)
     accuracy_class = intersection_meter.sum / (target_meter.sum + 1e-10)
@@ -408,10 +395,9 @@ def validate(val_loader, model, criterion):
     mAcc = np.mean(accuracy_class)
     allAcc = sum(intersection_meter.sum) / (sum(target_meter.sum) + 1e-10)
     if main_process():
-        logger.info('Val result: mIoU/mAcc/allAcc {:.4f}/{:.4f}/{:.4f}.'.format(mIoU, mAcc, allAcc))
-        for i in range(args.classes):
-            logger.info('Class_{} Result: iou/accuracy {:.4f}/{:.4f}.'.format(i, iou_class[i], accuracy_class[i]))
-        logger.info('<<<<<<<<<<<<<<<<< End Evaluation <<<<<<<<<<<<<<<<<')
+        logger.info('Val result: mIoU={:.4f} mAcc={:.4f} allAcc={:.4f}'.format(mIoU, mAcc, allAcc))
+        logger.info('  Class IoU: ' + ' | '.join('C{}={:.3f}'.format(i, iou_class[i]) for i in range(args.classes)))
+        logger.info('--- End validation ---')
     return loss_meter.avg, mIoU, mAcc, allAcc
 
 def test(model, test_loader, class_weights, class_encoding):

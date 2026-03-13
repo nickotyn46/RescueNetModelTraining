@@ -10,8 +10,8 @@ TRAIN:
   use_pretrained_weights: True # to indicate whether the model will use pre-trained weights or not
   dataset: rescuenet # @sh : new param
   sync_bn: True  # adopt syncbn or not
-  train_h: 897
-  train_w: 897
+  train_h: 769   # 4:3 oran (4000x3000), ~897² piksel; (H-1),(W-1) % 8 == 0
+  train_w: 1025
   scale_min: 0.5  # minimum random scale
   scale_max: 2.0  # maximum random scale
   rotate_min: -10  # minimum random rotate
@@ -19,6 +19,8 @@ TRAIN:
   zoom_factor: 8  # zoom factor for final prediction during training, be in [1, 2, 4, 8]
   ignore_label: 255
   aux_weight: 0.4
+  # Sınıf ağırlıkları: Background(0), Building Light(1), Building Heavy(2). Heavy az piksel olduğu için yüksek ağırlık.
+  class_weights: [0.5, 1.5, 4.0]
   train_gpu: [0]
   workers: 4  # data loader workers
   batch_size: 4  # 2+ GPU için en az 2*ngpus olmalı (BatchNorm); tek GPU'da da 4 kullanılabilir
@@ -53,8 +55,8 @@ TEST:
   mode: vis  # [test, vis], test=for numeric result, vis=for visual resutls
   predict_color: True
   base_size: 2048  # based size for scaling
-  test_h: 897
-  test_w: 897
+  test_h: 769
+  test_w: 1025
   scales: [1.0]  # evaluation scales, ms as [0.5, 0.75, 1.0, 1.25, 1.5, 1.75]
   has_prediction: False  # has prediction already or not
   index_start: 0  # evaluation start index in list
